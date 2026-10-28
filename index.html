@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ЭмИИн — личный ИИ-ассистент</title>
+  <meta name="description" content="ЭмИИн — умный помощник в твоём браузере. Работает на Claude, Gemini и OpenAI.">
+  <meta name="theme-color" content="#0b0b12">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+
+  <aside class="sidebar" id="sidebar" aria-label="Список чатов">
+    <div class="sidebar-head">
+      <button class="btn btn-primary" id="newChatBtn">＋ Новый чат</button>
+      <button class="btn btn-icon sidebar-close" id="closeSidebarBtn" title="Закрыть">✕</button>
+    </div>
+    <div class="chat-list" id="chatList"></div>
+    <div class="sidebar-foot">
+      <button class="btn btn-ghost" id="settingsBtn">⚙ Настройки</button>
+    </div>
+  </aside>
+  <div class="backdrop" id="backdrop"></div>
+
+  <main class="app">
+    <header class="topbar">
+      <button class="btn btn-icon" id="menuBtn" title="Меню">☰</button>
+      <div class="topbar-title">
+        <img src="icon.svg" alt="" class="topbar-logo">
+        <span id="topbarName">ЭмИИн</span>
+      </div>
+      <div class="topbar-right">
+        <span class="badge" id="modelBadge"></span>
+        <button class="btn btn-icon" id="topSettingsBtn" title="Настройки">⚙</button>
+      </div>
+    </header>
+
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <img src="icon.svg" alt="ЭмИИн" class="welcome-logo">
+        <h1>Привет, я ЭмИИн</h1>
+        <p>Твой личный ИИ-ассистент. Задай вопрос, прикрепи фото или просто поболтай.</p>
+        <div class="suggestions" id="suggestions"></div>
+      </div>
+      <div class="setup-banner" id="setupBanner" hidden></div>
+    </div>
+
+    <div class="composer-wrap">
+      <div class="composer" id="composer">
+        <div class="attach-preview" id="attachPreview" hidden></div>
+        <div class="composer-row">
+          <button class="btn btn-icon" id="attachBtn" title="Прикрепить изображение">＋</button>
+          <textarea id="input" rows="1" placeholder="Напиши сообщение…" enterkeyhint="send"></textarea>
+          <button class="btn btn-icon" id="micBtn" title="Голосовой ввод">🎤</button>
+          <button class="btn btn-send" id="sendBtn" title="Отправить">➤</button>
+        </div>
+        <div class="composer-hint">ЭмИИн может ошибаться — проверяй важные сведения.</div>
+      </div>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" hidden multiple>
+  </main>
+
+  <!-- Настройки -->
+  <div class="modal" id="settingsModal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Настройки</h2>
+        <button class="btn btn-icon" id="closeSettingsBtn" title="Закрыть">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span class="field-label">Движок ИИ</span>
+          <div class="tabs" id="providerTabs"></div>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Модель</span>
+          <input type="text" id="modelInput" list="modelList" autocomplete="off" spellcheck="false">
+          <datalist id="modelList"></datalist>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Системная инструкция (кто такой ЭмИИн)</span>
+          <textarea id="systemInput" rows="3" placeholder="Например: Ты — ЭмИИн, дружелюбный и полезный помощник. Отвечай понятно и по делу."></textarea>
+        </label>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Температура: <b id="tempVal">0.7</b></span>
+            <input type="range" id="tempInput" min="0" max="2" step="0.1" value="0.7">
+          </label>
+          <label class="field">
+            <span class="field-label">Макс. токенов ответа</span>
+            <input type="number" id="maxTokensInput" min="256" max="64000" step="256" value="8192">
+          </label>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Тема оформления</span>
+          <div class="seg" id="themeSeg">
+            <button data-theme-choice="dark">Тёмная</button>
+            <button data-theme-choice="light">Светлая</button>
+            <button data-theme-choice="auto">Авто</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <button class="btn btn-danger" id="clearChatsBtn">Удалить все чаты</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+</body>
+</html>

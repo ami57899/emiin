@@ -1,0 +1,18 @@
+# Render Blueprint — конфигурация деплоя «ЭмИИн»
+# Render прочитает этот файл при подключении репозитория и
+# настроит сервис автоматически (кнопка "Blueprint" / "Web Service").
+services:
+  - type: web
+    name: emiin
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

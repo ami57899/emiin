@@ -1,0 +1,15 @@
+{
+  "name": "emiin",
+  "version": "1.0.0",
+  "description": "ЭмИИн — личный ИИ-ассистент (Claude / Gemini / OpenAI) в браузере",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

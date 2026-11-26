@@ -1,5 +1,5 @@
 // Service Worker ЭмИИн — кэширует оболочку приложения для быстрой загрузки.
-const CACHE = 'emiin-v1';
+const CACHE = 'emiin-v2';
 const ASSETS = ['/', 'index.html', 'style.css', 'app.js', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

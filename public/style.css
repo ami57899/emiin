@@ -445,6 +445,23 @@ body {
   border: 1px solid var(--border);
   object-fit: cover;
 }
+.msg-media {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.generated-media {
+  display: block;
+  max-width: min(100%, 560px);
+  max-height: 65vh;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #000;
+}
+a.msg-tool {
+  text-decoration: none;
+}
 
 /* Потоковая печать */
 .cursor {
@@ -563,6 +580,18 @@ body {
   display: flex;
   align-items: flex-end;
   gap: 4px;
+}
+.mode-select {
+  flex: none;
+  max-width: 78px;
+  height: 40px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
 }
 #input {
   flex: 1;

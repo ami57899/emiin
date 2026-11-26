@@ -56,12 +56,17 @@
       <div class="composer" id="composer">
         <div class="attach-preview" id="attachPreview" hidden></div>
         <div class="composer-row">
+          <select id="generationMode" class="mode-select" aria-label="Режим ЭмИИн">
+            <option value="chat">Чат</option>
+            <option value="image">Фото</option>
+            <option value="video">Видео</option>
+          </select>
           <button class="btn btn-icon" id="attachBtn" title="Прикрепить изображение">＋</button>
           <textarea id="input" rows="1" placeholder="Напиши сообщение…" enterkeyhint="send"></textarea>
           <button class="btn btn-icon" id="micBtn" title="Голосовой ввод">🎤</button>
           <button class="btn btn-send" id="sendBtn" title="Отправить">➤</button>
         </div>
-        <div class="composer-hint">ЭмИИн может ошибаться — проверяй важные сведения.</div>
+        <div class="composer-hint" id="composerHint">ЭмИИн может ошибаться — проверяй важные сведения.</div>
       </div>
     </div>
     <input type="file" id="fileInput" accept="image/*" hidden multiple>

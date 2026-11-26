@@ -65,6 +65,11 @@ const MAX_TOKENS = {
   gemini: 8192,
 };
 
+const MEDIA_MODELS = {
+  image: 'gemini-nano-banana-2.1',
+  video: 'gemini-omni-1.2-flash',
+};
+
 // ---------------------------------------------------------------
 //  Вспомогательные функции
 // ---------------------------------------------------------------
@@ -377,6 +382,154 @@ async function handleChat(req, res) {
   }
 }
 
+function interactionMedia(interaction, kind) {
+  for (const step of interaction.steps || []) {
+    if (step.type !== 'model_output') continue;
+    for (const item of step.content || []) {
+      if (item.type === kind && typeof item.data === 'string') {
+        return {
+          mimeType: item.mime_type || (kind === 'image' ? 'image/png' : 'video/mp4'),
+          data: item.data,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+async function requestGeminiInteraction(url, options, signal) {
+  const resp = await fetch(url, { ...options, signal });
+  let data;
+  try {
+    data = await resp.json();
+  } catch {
+    throw new Error('Gemini вернул ответ в неизвестном формате.');
+  }
+  if (!resp.ok) {
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error('Ключ Gemini не принят или у него нет доступа к генерации.');
+    }
+    if (resp.status === 429) {
+      throw new Error('Исчерпан лимит Gemini. Попробуй позже или проверь оплату и квоты.');
+    }
+    if (resp.status >= 500) {
+      throw new Error('Сервис Gemini временно недоступен. Попробуй позже.');
+    }
+    console.error('Gemini media API rejected request:', resp.status);
+    throw new Error('Gemini отклонил запрос. Проверь описание и доступность модели.');
+  }
+  return data;
+}
+
+async function generateMedia(req, res, kind) {
+  if (!process.env.GOOGLE_API_KEY) {
+    return sendJson(res, 503, { error: 'Генерация недоступна: на сервере не настроен GOOGLE_API_KEY.' });
+  }
+
+  let body;
+  try {
+    body = await readJson(req);
+  } catch (e) {
+    return sendJson(res, 400, { error: e.message });
+  }
+
+  const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+  if (!prompt) return sendJson(res, 400, { error: 'Напиши описание, что нужно создать.' });
+  if (prompt.length > 2000) {
+    return sendJson(res, 400, { error: 'Описание слишком длинное (максимум 2000 символов).' });
+  }
+
+  const images = body.images === undefined ? [] : body.images;
+  if (!Array.isArray(images) || images.length > 4) {
+    return sendJson(res, 400, { error: 'Можно приложить не больше четырёх изображений.' });
+  }
+
+  let imageBytes = 0;
+  for (const image of images) {
+    if (
+      !image ||
+      !['image/jpeg', 'image/png', 'image/webp'].includes(image.mime) ||
+      typeof image.data !== 'string' ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data)
+    ) {
+      return sendJson(res, 400, { error: 'Одно из приложенных изображений имеет неверный формат.' });
+    }
+    imageBytes += image.data.length;
+  }
+  if (imageBytes > 10 * 1024 * 1024) {
+    return sendJson(res, 413, { error: 'Слишком большой объём изображений. Удали часть файлов и попробуй снова.' });
+  }
+
+  const input = images.length
+    ? [
+        { type: 'text', text: prompt },
+        ...images.map((image) => ({
+          type: 'image',
+          mime_type: image.mime,
+          data: image.data,
+        })),
+      ]
+    : prompt;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 240000);
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+
+  try {
+    const baseUrl = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': process.env.GOOGLE_API_KEY,
+      'Api-Revision': '2026-05-20',
+    };
+    const request = {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: MEDIA_MODELS[kind],
+        input,
+        store: false,
+        ...(kind === 'video'
+          ? { response_format: { type: 'video', aspect_ratio: '16:9' } }
+          : {}),
+      }),
+    };
+
+    let interaction = await requestGeminiInteraction(baseUrl, request, controller.signal);
+    const deadline = Date.now() + 230000;
+    while (interaction.status === 'in_progress' && interaction.id && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      interaction = await requestGeminiInteraction(
+        `${baseUrl}/${encodeURIComponent(interaction.id)}`,
+        { method: 'GET', headers },
+        controller.signal
+      );
+    }
+    if (interaction.status === 'failed' || interaction.status === 'cancelled') {
+      throw new Error('Gemini не смог завершить генерацию. Попробуй изменить описание.');
+    }
+    if (interaction.status === 'in_progress') {
+      throw new Error('Генерация заняла слишком много времени. Попробуй ещё раз позже.');
+    }
+
+    const media = interactionMedia(interaction, kind);
+    if (!media) {
+      throw new Error(`Gemini не вернул ${kind === 'image' ? 'изображение' : 'видео'}. Попробуй изменить описание.`);
+    }
+    return sendJson(res, 200, { media });
+  } catch (err) {
+    if (res.destroyed || res.writableEnded) return;
+    if (err.name === 'AbortError') {
+      return sendJson(res, 504, { error: 'Генерация была прервана или заняла слишком много времени.' });
+    }
+    return sendJson(res, 502, { error: err.message || 'Не удалось создать файл.' });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function serveStatic(res, pathname) {
   const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
   const full = path.normalize(path.join(PUBLIC_DIR, rel));
@@ -421,6 +574,14 @@ async function handleRequest(req, res) {
 
   if (req.method === 'POST' && pathname === '/api/chat') {
     return handleChat(req, res);
+  }
+
+  if (req.method === 'POST' && pathname === '/api/generate-image') {
+    return generateMedia(req, res, 'image');
+  }
+
+  if (req.method === 'POST' && pathname === '/api/generate-video') {
+    return generateMedia(req, res, 'video');
   }
 
   if (req.method !== 'GET' && req.method !== 'HEAD') {

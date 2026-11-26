@@ -5,6 +5,7 @@
 'use strict';
 
 const LS = { chats: 'emiin.chats', settings: 'emiin.settings' };
+const MEDIA_DB = 'emiin.media';
 
 const PROVIDERS = [
   { id: 'anthropic', name: 'Claude' },
@@ -66,6 +67,8 @@ let pendingImages = []; // [{ mime, data }]
 let streaming = false;
 let abortCtrl = null;
 let streamEl = null; // DOM-элемент, куда идёт потоковый текст
+let mediaDbPromise = null;
+const generatedMediaUrls = new Set();
 
 // ---------------------------------------------------------------
 //  Короткие утилиты
@@ -230,6 +233,38 @@ function buildMessageEl(msg) {
     bubble.appendChild(imgs);
   }
 
+  if (msg.role === 'assistant' && msg.media) {
+    const mediaBox = document.createElement('div');
+    mediaBox.className = 'msg-media';
+    const mediaEl = document.createElement(msg.media.type === 'video' ? 'video' : 'img');
+    mediaEl.className = 'generated-media';
+    mediaEl.alt = msg.media.type === 'image' ? 'Созданное изображение' : '';
+    if (msg.media.type === 'video') {
+      mediaEl.controls = true;
+      mediaEl.playsInline = true;
+      mediaEl.preload = 'metadata';
+    }
+    mediaBox.appendChild(mediaEl);
+
+    const download = document.createElement('a');
+    download.className = 'msg-tool';
+    download.textContent = '⬇ Скачать';
+    download.download = msg.media.type === 'video' ? 'emiin-video.mp4' : 'emiin-image.png';
+    mediaBox.appendChild(download);
+    bubble.appendChild(mediaBox);
+
+    loadGeneratedMedia(msg.media.id).then((blob) => {
+      if (!mediaEl.isConnected) return;
+      const url = URL.createObjectURL(blob);
+      generatedMediaUrls.add(url);
+      mediaEl.src = url;
+      download.href = url;
+    }).catch(() => {
+      if (!mediaBox.isConnected) return;
+      mediaBox.textContent = 'Файл не найден в хранилище этого браузера.';
+    });
+  }
+
   const content = document.createElement('div');
   content.className = 'markdown';
 
@@ -319,6 +354,8 @@ function welcomeEl(anyProvider) {
 
 function renderMessages() {
   const container = $('messages');
+  for (const url of generatedMediaUrls) URL.revokeObjectURL(url);
+  generatedMediaUrls.clear();
   container.innerHTML = '';
   streamEl = null;
 
@@ -383,10 +420,15 @@ function renderChatList() {
 }
 
 function deleteChat(id) {
+  const deletedChat = chats.find((chat) => chat.id === id);
   chats = chats.filter((c) => c.id !== id);
   if (currentId === id) currentId = chats[0]?.id ?? null;
   saveChats();
   renderAll();
+  removeGeneratedMedia(mediaIds(deletedChat)).catch((error) => {
+    console.error('Could not remove chat media:', error);
+    toast('Чат удалён, но файлы медиа не удалось очистить');
+  });
 }
 
 function renderAll() {
@@ -449,6 +491,12 @@ async function sendMessage() {
     return;
   }
 
+  const mode = $('generationMode').value;
+  if (mode === 'image' || mode === 'video') {
+    await generateMedia(mode);
+    return;
+  }
+
   if (!config.providers || !config.providers[settings.provider]) {
     toast('Сначала добавь API-ключ для «' + providerName() + '» в файле .env');
     return;
@@ -475,6 +523,78 @@ async function sendMessage() {
   renderAll();
 
   await streamResponse(chat);
+}
+
+async function generateMedia(kind) {
+  if (!config.providers?.gemini) {
+    toast('Для генерации нужен GOOGLE_API_KEY на сервере');
+    return;
+  }
+
+  const text = $('input').value.trim();
+  if (!text) {
+    toast('Сначала напиши, что нужно создать');
+    $('input').focus();
+    return;
+  }
+
+  const images = pendingImages;
+  pendingImages = [];
+  renderPreview();
+  $('input').value = '';
+  autoResize();
+
+  const chat = ensureChat();
+  if (chat.title === 'Новый чат') chat.title = text.slice(0, 48);
+  chat.messages.push({ role: 'user', content: text, images: images.length ? images : undefined });
+  const aiMsg = {
+    role: 'assistant',
+    content: kind === 'image' ? 'Создаю изображение…' : 'Создаю видео…',
+    streaming: true,
+  };
+  chat.messages.push(aiMsg);
+  saveChats();
+  renderAll();
+
+  streaming = true;
+  updateSendBtn();
+  abortCtrl = new AbortController();
+
+  try {
+    const resp = await fetch('/api/generate-' + kind, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: abortCtrl.signal,
+      body: JSON.stringify({ prompt: text, images }),
+    });
+    const result = await resp.json().catch(() => ({ error: 'Ошибка сервера: ' + resp.status }));
+    if (!resp.ok) throw new Error(result.error || 'Ошибка ' + resp.status);
+    if (!result.media?.data || !result.media?.mimeType) {
+      throw new Error('Сервер не вернул созданный файл.');
+    }
+
+    const mediaId = await storeGeneratedMedia(
+      base64ToBlob(result.media.data, result.media.mimeType)
+    );
+    aiMsg.content = '';
+    aiMsg.media = { id: mediaId, type: kind, mimeType: result.media.mimeType };
+  } catch (e) {
+    aiMsg.content = '';
+    if (e.name === 'AbortError') {
+      aiMsg.error = true;
+      aiMsg.errorText = 'Запрос прерван. Если генерация уже началась, API может всё равно учесть её в расходах.';
+    } else {
+      aiMsg.error = true;
+      aiMsg.errorText = e.message || 'Не удалось создать файл.';
+    }
+  } finally {
+    aiMsg.streaming = false;
+    streaming = false;
+    abortCtrl = null;
+    saveChats();
+    renderAll();
+    updateSendBtn();
+  }
 }
 
 async function streamResponse(chat) {
@@ -568,6 +688,86 @@ async function streamResponse(chat) {
 // ---------------------------------------------------------------
 //  Изображения
 // ---------------------------------------------------------------
+
+function openMediaDb() {
+  if (!window.indexedDB) return Promise.reject(new Error('Хранилище медиа не поддерживается браузером.'));
+  if (!mediaDbPromise) {
+    mediaDbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(MEDIA_DB, 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore('generated', { keyPath: 'id' });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Не удалось открыть хранилище медиа.'));
+    }).catch((error) => {
+      mediaDbPromise = null;
+      throw error;
+    });
+  }
+  return mediaDbPromise;
+}
+
+async function storeGeneratedMedia(blob) {
+  const db = await openMediaDb();
+  const id = uid();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction('generated', 'readwrite');
+    transaction.objectStore('generated').put({ id, blob });
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error || new Error('Не удалось сохранить медиафайл.'));
+    transaction.onabort = () => reject(transaction.error || new Error('Сохранение медиафайла отменено.'));
+  });
+  return id;
+}
+
+async function loadGeneratedMedia(id) {
+  const db = await openMediaDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('generated', 'readonly');
+    const request = transaction.objectStore('generated').get(id);
+    let blob = null;
+    request.onsuccess = () => {
+      blob = request.result?.blob || null;
+    };
+    request.onerror = () => reject(request.error || new Error('Не удалось прочитать медиафайл.'));
+    transaction.oncomplete = () => {
+      if (blob) resolve(blob);
+      else reject(new Error('Медиафайл отсутствует.'));
+    };
+    transaction.onerror = () => reject(transaction.error || new Error('Не удалось прочитать медиафайл.'));
+  });
+}
+
+function mediaIds(chat) {
+  return (chat?.messages || [])
+    .map((message) => message.media?.id)
+    .filter((id) => typeof id === 'string');
+}
+
+async function removeGeneratedMedia(ids) {
+  if (!ids.length || !window.indexedDB) return;
+  const db = await openMediaDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction('generated', 'readwrite');
+    const store = transaction.objectStore('generated');
+    ids.forEach((id) => store.delete(id));
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error || new Error('Не удалось очистить хранилище медиа.'));
+    transaction.onabort = () => reject(transaction.error || new Error('Очистка медиа отменена.'));
+  });
+}
+
+function base64ToBlob(data, mimeType) {
+  const binary = atob(data);
+  const chunks = [];
+  for (let offset = 0; offset < binary.length; offset += 8192) {
+    const part = binary.slice(offset, offset + 8192);
+    const bytes = new Uint8Array(part.length);
+    for (let i = 0; i < part.length; i++) bytes[i] = part.charCodeAt(i);
+    chunks.push(bytes);
+  }
+  return new Blob(chunks, { type: mimeType });
+}
 
 function readFileAsDataURL(file) {
   return new Promise((resolve, reject) => {
@@ -726,10 +926,15 @@ function bindSettingsEvents() {
   $('clearChatsBtn').onclick = () => {
     if (!chats.length) return toast('Чатов и так нет');
     if (!confirm('Удалить все чаты? Это действие нельзя отменить.')) return;
+    const mediaToDelete = chats.flatMap(mediaIds);
     chats = [];
     currentId = null;
     saveChats();
     renderAll();
+    removeGeneratedMedia(mediaToDelete).catch((error) => {
+      console.error('Could not clear chat media:', error);
+      toast('Чаты удалены, но файлы медиа не удалось очистить');
+    });
     toast('Все чаты удалены');
   };
 }
@@ -748,6 +953,20 @@ function bindComposerEvents() {
   const input = $('input');
 
   input.addEventListener('input', autoResize);
+  $('generationMode').addEventListener('change', () => {
+    const mode = $('generationMode').value;
+    $('composerHint').textContent = mode === 'video'
+      ? 'Видео создаётся через Gemini и может расходовать платную квоту.'
+      : mode === 'image'
+        ? 'Фото создаётся через Gemini и может расходовать платную квоту.'
+        : 'ЭмИИн может ошибаться — проверяй важные сведения.';
+    input.placeholder = mode === 'chat'
+      ? 'Напиши сообщение…'
+      : mode === 'image'
+        ? 'Опиши изображение…'
+        : 'Опиши видео…';
+    $('sendBtn').title = mode === 'chat' ? 'Отправить' : 'Создать';
+  });
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {

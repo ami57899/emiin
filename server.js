@@ -407,10 +407,14 @@ async function requestGeminiInteraction(url, options, signal) {
   }
   if (!resp.ok) {
     if (resp.status === 401 || resp.status === 403) {
-      throw new Error('Ключ Gemini не принят или у него нет доступа к генерации.');
+      const error = new Error('Ключ Gemini не принят или у него нет доступа к генерации.');
+      error.statusCode = resp.status;
+      throw error;
     }
     if (resp.status === 429) {
-      throw new Error('Исчерпан лимит Gemini. Попробуй позже или проверь оплату и квоты.');
+      const error = new Error('Исчерпан лимит Gemini. Попробуй позже или проверь оплату и квоты.');
+      error.statusCode = resp.status;
+      throw error;
     }
     if (resp.status >= 500) {
       throw new Error('Сервис Gemini временно недоступен. Попробуй позже.');
@@ -524,7 +528,8 @@ async function generateMedia(req, res, kind) {
     if (err.name === 'AbortError') {
       return sendJson(res, 504, { error: 'Генерация была прервана или заняла слишком много времени.' });
     }
-    return sendJson(res, 502, { error: err.message || 'Не удалось создать файл.' });
+    const status = [400, 401, 403, 429].includes(err.statusCode) ? err.statusCode : 502;
+    return sendJson(res, status, { error: err.message || 'Не удалось создать файл.' });
   } finally {
     clearTimeout(timeout);
   }
